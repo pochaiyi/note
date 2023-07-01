@@ -10,7 +10,7 @@ JWT 表示为一个长字符串，这个字符串由以 `.` 连接的 3 个子�
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
 ```
 
-## 头部 Header
+**头部 Header**
 
 保存元数据，通常只有两个字段：
 
@@ -30,7 +30,7 @@ eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4
 eyJhbGciOiJIUzI1NiIsInR5cCI6Imp3dCJ9
 ```
 
-## 负载 Deploy
+**负载 Deploy**
 
 保存用户数据，包括签发者、接收者、签发时间、生效时间、过期时间、唯一标识这些官方字段。
 
@@ -48,7 +48,7 @@ eyJhbGciOiJIUzI1NiIsInR5cCI6Imp3dCJ9
 eyJzdWIiOiIxMjM0NDMyMSIsIm5hbWUiOiJNYXJz6YWxIiwiaWF0IjoxNTE2MjM5MDIyfQ
 ```
 
-## 签名 Signature
+**签名 Signature**
 
 校验 Header 和 Payload，防止信息被篡改，这个 `secret` 就是前面 Base64 所用的盐值。
 
