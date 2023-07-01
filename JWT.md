@@ -1,6 +1,6 @@
 # JSON Web Token
 
-JWT 是一种数据交换格式，它以紧凑独立的方式传输 JSON 数据。
+JWT 是一种数据交换格式，它以独立紧凑的方式传输 JSON 数据。
 
 # 内容结构
 
@@ -15,7 +15,7 @@ eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4
 保存元数据，通常只有两个字段：
 
 * `typ`：Token 类型，默认 `jwt`。
-* `alg`：Signature 使用的加密算法，默认 HS256，还可以是 RSA、ECDSA 等。
+* `alg`：签名的加密算法，默认 HS256，还可以是 RSA、ECDSA 等。
 
 示例，这是 Header 原文，以及经过 Base64 加密的结果。加密方式固定，不可修改。
 
@@ -50,10 +50,10 @@ eyJzdWIiOiIxMjM0NDMyMSIsIm5hbWUiOiJNYXJz6YWxIiwiaWF0IjoxNTE2MjM5MDIyfQ
 
 ## 签名 Signature
 
-校验 Header 和 Payload，防止信息被篡改，这个 `secret` 就是前面 Base64 加密所用的盐值。
+校验 Header 和 Payload，防止信息被篡改，这个 `secret` 就是前面 Base64 所用的盐值。
 
 ```
-HMACSHA256( // 使用Header定义的加密算法
+HMACSHA256( // Header定义的加密算法
         base64UrlEncode(header) + "." + base64UrlEncode(payload),
         secret
 	)
@@ -68,9 +68,9 @@ JWT 常用于用户授权，避免反复登录，以下是可能的处理流程�
 * 客户端把 JWT 放在 Cookie 或 LocalStorage，用于后续请求；
 * 服务端收到请求，获取和解析 JWT，得知用户身份，验证权限，然后返回所求资源。
 
-用户信息放在 JWT 内部，服务端不用保存任何数据，节省大量内存；JWT 可拓展性高，天然支持分布式服务。
+用户信息放在 JWT 内部，服务端不用保存任何数据，节省内存；JWT 可拓展性高，天然支持分布式服务。
 
-服务器无法控制前发出去的 JWT，最多在创建时设置较短的有效期。
+服务器无法控制签发出去的 JWT，最多在创建时设置较短的有效期。
 
 # Spring 集成
 
@@ -84,7 +84,7 @@ JWT 常用于用户授权，避免反复登录，以下是可能的处理流程�
 </dependency>
 ```
 
-生成 Token
+创建 Token
 
 ```
 public static String createToken(long id) throws Exception {
