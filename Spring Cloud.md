@@ -22,7 +22,7 @@
 
 **服务治理**
 
-单体服务拆分以后各种问题和解决方案的集合，比如鉴权、限流、降级、熔断、监控。
+服务拆分以后遇到的各种问题和解决方案的集合，比如鉴权、限流、降级、熔断、监控。
 
 **服务降级**
 
@@ -48,10 +48,10 @@
 
 **取舍策略**
 
-* **CP without A**：遇到分区，挂起请求，直到其它节点完成数据同步。Zookeeper，Consul。
+* **CP without A**：遇到分区，挂起请求，直到所有节点完成数据同步。Zookeeper，Consul。
 * **AP wihtout C**：遇到分区，正常返回，但可能是尚未更新的旧数据。Eureka。
 
-如果考虑用户体验，应该选择 AP；如果对数据特别敏感，比如拍卖场景，那就选择 CP；另外，即使 CP 通常也要实现弱一致性或最终一致性。
+如果看重用户体验，应该选择 AP；如果对数据特别敏感，比如拍卖场景，那就选择 CP；另外，即使 CP 通常也要实现弱一致性或最终一致性。
 
 ## 依赖管理
 
@@ -85,19 +85,19 @@
 
 ## 初步认识
 
-Eureka 是 Spring Cloud Netflix 系列组件，用于注册服务。分布式系统的服务向 Eureka 注册，Eureka 保存这些服务的节点信息，消费者向 Eureka 请求提供者的信息，然后进行远程调用、负载均衡。
+Eureka 是 Spring Cloud Netflix 系列组件，用于注册服务。分布式系统的服务向 Eureka 注册，Eureka 保存这些服务的节点信息，消费者向 Eureka 请求服务列表，然后进行远程调用、负载均衡。
 
 **软件架构**
 
-Eureka 基于 C/S 架构设计，服务端是注册中心，客户端是系统的各个服务。
+Eureka 基于 C/S 架构设计，服务端是注册中心，客户端是系统的服务。
 
 **心跳机制**
 
-Eureka 客户端注册之后，需要定时向服务端发送心跳，默认周期 30 秒。如果服务端连续多个周期没有收到某个客户端的心跳，默认 3 个周期 90 秒，那就认为这个服务挂掉，自动把它从注册表剔除。
+Eureka 客户端注册之后，需要定时向服务端发送心跳，默认周期 30 秒。如果服务端连续多个周期没有收到某个客户端的心跳，默认 3 个周期 90 秒，那就认为这个服务挂掉，把它从注册表剔除。
 
 **自我保护**
 
-如果 Eureka Server 某段时间内收到的总心跳数小于预期，那就进入自我保护状态：
+如果 Eureka Server 某段时间内收到的心跳总数小于预期，那就进入自我保护状态：
 
 * 拒绝移除长时间没有心跳的服务；
 * 仍然支持服务注册和查询请求，但是不会同步到其它节点；
@@ -109,9 +109,9 @@ Eureka 客户端注册之后，需要定时向服务端发送心跳，默认周�
 
 Eureka Client 注册之后，可能持续一段时间无法被服务发现，有以下原因：
 
-* Eureka Server 使用二级缓存：读写缓存 + 只读缓存，前者缓存周期是 180 秒，后者默认每 30 秒向读写缓存同步数据。客户端请求先查只读缓存，没有再查读写缓存，还没有就加载存储数据到缓存；
-* Eureka Client 缓存服务注册表，默认每 30 秒从 Eureka Server 拉取数据更新；
-* Ribbon 维护 ServerList 列表，默认每 30 秒从 Eureka Client 拉取数据更新。
+* Eureka Server 使用二级缓存：读写缓存 + 只读缓存，前者缓存周期是 180 秒，后者默认每 30 秒从读写缓存同步数据。客户端请求先查只读缓存，没有命中再查读写缓存，还没有就加载存储数据到缓存；
+* Eureka Client 缓存服务注册表，默认每 30 秒从 Eureka Server 更新数据；
+* Ribbon 维护 ServerList 列表，默认每 30 秒从 Eureka Client 更新数据。
 
 所以，极端情况，新的服务可能要 30 + 30 + 30 秒才会被发现。
 
@@ -138,7 +138,7 @@ public class Application {
 }
 ```
 
-配置属性，Eureka Server 只是平台，没有必要注册自己或拉取注册表。
+配置属性，Eureka Server 只是平台，没有必要注册自己或拉取信息。
 
 ```
 server:
@@ -152,7 +152,7 @@ eureka:
       defaultZone: http://localhost:8091/eureka
 ```
 
-修改 `eureka.service-url.defaultZone` 属性搭建集群，节点之间平等独立，通过相互注册提高可用性，注册信息将会分享给配置的其它节点。
+修改 `eureka.service-url.defaultZone` 属性搭建集群，各个节点平行独立，通过相互注册提高可用性，注册信息将会分享给配置的其它节点。
 
 ```
 eureka:
@@ -212,7 +212,7 @@ eureka:
 
 Ribbon 是 Spring Cloud Netflix 系列组件，用于负载均衡，它在消费者端使用。Ribbon 维护一个列表，保存所有服务节点信息，ServerList 源于注册中心或手动配置，支持动态更新。
 
-Eureka 包含 Ribbon，可以理解，毕竟它们设计之初是为联合使用。
+Eureka 包含 Ribbon，可以理解，毕竟它们设计之初就是为联合使用。
 
 ```
 <dependency>
@@ -236,7 +236,7 @@ public class ConsumerConfig {
 }
 ```
 
-处理器方法，使用 `LoadBalancerClient` 向 Eureka 获取服务列表，这个类由 Spring Cloud 提供。
+处理器方法，使用 `LoadBalancerClient` 手动向 Eureka 获取节点信息，这个类由 Spring Cloud 提供。
 
 ```
 @RestController
@@ -258,7 +258,7 @@ public class ConsumerController {
     }
 
     /**
-     * 通过注册中心，获取服务提供者地址
+     * 向Eureka请求提供者信息
      */
     @GetMapping("/consumers/{code}")
     public HashMap<String, String> consume02(@PathVariable String code) {
@@ -287,7 +287,7 @@ public class ConsumerConfig {
 }
 ```
 
-处理器方法，现在 `RestTemplate` 只能用**服务名**作为调用地址，而非 IP 地址。
+处理器方法，使用**服务名**作为调用地址，Ribbon 根据策略和服务列表拼接真实 IP 地址，直接 IP 地址错误。
 
 ```
 @RestController
@@ -301,10 +301,7 @@ public class ConsumerController {
      */
     @GetMapping("/consumers/ribbon/{code}")
     public HashMap<String, String> consume03(@PathVariable String code) {
-        ServiceInstance provider = balancerClient.choose("provider");
-        String host = provider.getHost();
-        String uri = "/providers/" + code;
-        int port = provider.getPort();
+        String uri = "/providers/" + who;
         String url = "http://" + "provider" + uri; // 使用Eureka注册的服务名作为地址
         return restTemplate.getForObject(url, HashMap.class);
     }
@@ -315,14 +312,14 @@ public class ConsumerController {
 
 `IRule` 接口表示负载均衡策略，Ribbon 提供许多它的实现，默认采用轮询。
 
-| 负载均衡策略实现           | 说明                             |
-| -------------------------- | -------------------------------- |
-| `RoundRobinRule`           | 轮询                             |
-| `RandomRule`               | 随机                             |
-| `RetryRule`                | 轮询，重试                       |
-| `WeightedResponseTimeRule` | 优先选择响应速度更快的服务提供者 |
+| 负载均衡策略实现           | 说明                         |
+| -------------------------- | ---------------------------- |
+| `RoundRobinRule`           | 轮询                         |
+| `RandomRule`               | 随机                         |
+| `RetryRule`                | 轮询 + 重试                  |
+| `WeightedResponseTimeRule` | 优先选择响应速度更快的提供者 |
 
-可以实现 `IRule` 来自定义负载均衡策略，把它配置为组件进行启用。
+可以实现 `IRule`，自定义负载均衡策略，注册它为 Bean 进行启用。
 
 ```
 @Configuration
@@ -337,16 +334,16 @@ public class ConsumerConfig {
 
 ## 服务检测
 
-执行负载均衡之前，Ribbon 需要检测节点是否可用，`IPing` 接口表示检测手段，Ribbon 提供许多它的实现。
+执行负载均衡之前，Ribbon 需要检测节点是否可用，`IPing` 接口表示检测逻辑，Ribbon 提供许多它的实现。
 
 | 服务检测实现        | 说明                          |
 | ------------------- | ----------------------------- |
 | `NIWSDiscoveryPing` | 使用 Eureka 反馈，默认        |
-| `PingUrl`           | 使用 `HttpClient` Ping 服务   |
+| `PingUrl`           | 使用 `HttpClient` Ping 功能   |
 | `DummyPing`         | 默认返回 `true`，除非发生错误 |
 | `NoOpPing`          | 直接返回 `true`               |
 
-可以实现 `IPing` 来自定义服务检测，把它配置为组件进行启用。
+可以实现 `IPing`，自定义服务检测，注册它为 Bean 进行启用。
 
 ```
 @Configuration
@@ -363,17 +360,17 @@ public class ConsumerConfig {
 
 ## 初步认识
 
-Hystrix 是 Spring Cloud Netflix 系列组件，用于服务降级，同时支持熔断、缓存。注意，Hystrix 本身与业务实现无关，有没有它系统都能运行，但它能使服务总是返回合适的内容，即使发生错误。
+Hystrix 是 Spring Cloud Netflix 系列组件，用于服务降级，同时支持熔断、缓存。注意，Hystrix 本身与业务实现无关，有没有它系统都能运行。
 
 **运行流程**
 
-以下是 Hystrix 运行流程图
+`run()`/`construct()` 表示 Hystrix 修饰的内容，通常是远程服务调用或服务本身，这取决于 Hystrix 位于消费者或提供者。Hystrix 包裹服务，给它一个保底措施，如果失败、超时，返回友好的内容而非异常，这有点类似异常处理器。Hystrix 熔断直接拒绝请求，控制流量，它会动态调整状态，随时恢复正常，这在请求剧增时能保证系统正常运行，而不会被大量请求瞬间压垮。
 
 ![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/netflix-cloud-42d049ed.png)
 
 **引入依赖**
 
-暂时独立使用 Hystrix，后面再进行系统集成。
+独立 Hystrix，后面再讨论系统集成。
 
 ```
 <dependency>
@@ -385,13 +382,13 @@ Hystrix 是 Spring Cloud Netflix 系列组件，用于服务降级，同时支�
 
 ## 命令对象
 
-根据运行流程图，可以知道 `HystrixCommand`、`HystrixObservableCommand ` 是 Hystrix 使用入口，这两个命令对象封装 Hystrix 各种特性，它们共有 4 种运行方式，重点掌握 `queue()`。
+根据运行流程图，可知 `HystrixCommand`、`HystrixObservableCommand ` 是 Hystrix 使用入口，这两个命令对象封装 Hystrix 各种特性，它们共有 4 种执行方式，重点掌握 `queue()`。
 
-命令对象实例化时必须指定 GroupKey，这个属性用于分组监控和报警信息。
+命令对象实例化时必须设置 GroupKey，这个属性用于分组监控和报警信息。
 
 **HystrixCommand**
 
-继承 `HystrixCommand`，重写构造器和 `run()`，`run()` 表示被修饰的业务逻辑。
+继承 `HystrixCommand`，重写构造器和 `run()`。
 
 ```
 public class MyHystrixCommand extends HystrixCommand<String> {
@@ -399,6 +396,7 @@ public class MyHystrixCommand extends HystrixCommand<String> {
     private String name;
 
     public MyHystrixCommand(String groupName) {
+    	// 设置GroupKey，name是自定的属性，用于标识对象
         super(Setter.withGroupKey(HystrixCommandGroupKey.Factory.asKey(groupName)));
         this.name = groupName;
     }
@@ -419,7 +417,7 @@ public class MyHystrixCommand extends HystrixCommand<String> {
 
 **HystrixObservableCommand**
 
-继承 `HystrixObservableCommand`，重写构造器和 `construct()`，后者返回 `Observable` 对象，用于阻塞或非阻塞调用，如果用于非阻塞，`construct()` 至多调用一次 `onNext()`。
+继承 `HystrixObservableCommand`，重写构造器和 `construct()`，后者返回 `Observable` 对象，这个对象用于阻塞或非阻塞调用。对于非阻塞调用，`construct()` 至多调用一次 `onNext()`。
 
 > `HystrixCommand` 默认使用线程池运行，`HystrixObservableCommand` 默认使用调用线程运行。
 
@@ -447,7 +445,7 @@ public class MyObserveHystrixCommand extends HystrixObservableCommand<String> {
         return Observable.create(new Observable.OnSubscribe<String>() {
             @Override
             public void call(Subscriber<? super String> subscriber) {
-                // 业务逻辑放在onNext方法
+                // 具体业务逻辑放在onNext方法
                 subscriber.onNext("next-1");
                 subscriber.onNext("next-2");
                 subscriber.onNext("next-3");
@@ -463,7 +461,7 @@ public class MyObserveHystrixCommand extends HystrixObservableCommand<String> {
 
 ### 同步执行 Execute
 
-底层调用 `queue().get()`，所以也在异步运行，只是使用阻塞调用获取结果。
+底层调用 `queue().get()`，所以也是异步执行，只是使用阻塞调用获取结果。
 
 ```
 @Test
@@ -499,7 +497,7 @@ public void queueTest() throws ExecutionException, InterruptedException {
 
 ### 观察者 Observe
 
-返回 `Observable` 对象用于阻塞或非阻塞调用，非阻塞调用需要设置回调方法处理返回。
+返回 `Observable` 对象，阻塞或非阻塞调用，非阻塞调用需要设置几个回调方法处理返回结果。
 
 ```
 @Test
@@ -507,7 +505,7 @@ public void observeBlockTest() {
     long beginTime = System.currentTimeMillis();
     MyHystrixCommand myHystrixCommand = new MyHystrixCommand("executeGroup");
     Observable<String> observe = myHystrixCommand.observe();
-    // 阻塞式调用
+    // 阻塞式调用，类似Execute
     String blockResult = observe.toBlocking().single();
     long endTime = System.currentTimeMillis();
     System.err.println("[Observe Block] " + blockResult + 
@@ -515,7 +513,7 @@ public void observeBlockTest() {
 }
 ```
 
-这个 `Observable` 是 Hot 对象，首先运行 `run()`，然后加载 `Subscriber` 对象并执行回调。
+这个 `Observable` 是 Hot 对象，首先运行 `run()`，然后才加载 `Subscriber` 对象并执行回调。
 
 ```
 @Test
@@ -548,7 +546,7 @@ public void observeSubscribe() throws InterruptedException {
 
 ### 观察者 ToObservable
 
-`toObservable()` 类似 `observe()`，返回 `Observable` 对象，这个对象只能运行一次。
+`toObservable()` 类似 `observe()`，返回 `Observable` 对象，这个对象只能执行一次。
 
 ```
 @Test
@@ -564,7 +562,7 @@ public void toObserveBlockTest() {
 }
 ```
 
-这个 `Observable` 是 Cold 对象，首先加载 `Subscriber` 对象，然后运行 `run()`，最后执行回调。
+这个 `Observable` 是 Cold 对象，首先加载 `Subscriber` 对象，然后才运行 `run()`，最后执行回调。
 
 ```
 @Test
@@ -597,7 +595,7 @@ public void toObserveSubscribe() throws InterruptedException {
 
 ## 请求缓存
 
-Hystrix 支持缓存请求结果，首先开启请求缓存，默认开启。
+Hystrix 会缓存请求结果，即 `run()`/`construct()` 返回。首先需要开启缓存，默认开启。
 
 ```
 public MyHystrixCommand(String groupName) {
@@ -605,14 +603,14 @@ public MyHystrixCommand(String groupName) {
             .withGroupKey(HystrixCommandGroupKey.Factory.asKey(groupName))
             .andCommandPropertiesDefaults(
             	HystrixCommandProperties.
-                	defaultSetter().withRequestCacheEnabled(true) // 请求缓存开关
+                	defaultSetter().withRequestCacheEnabled(true) // 缓存开关
             )
     );
     this.name = groupName;
 }
 ```
 
-重写 `getCacheKey()`，返回值是缓存的标识符，命令对象使用它存储和查找缓存。
+重写 `getCacheKey()`，返回值是缓存的 Key，命令对象使用它存储和查找缓存。
 
 ```
 @Override
@@ -621,7 +619,7 @@ public String getCacheKey() {
 }
 ```
 
-只有处于相同请求上下文的请求才能分享缓存，命中缓存直接返回而不执行业务。
+只有处于相同请求上下文的请求才能分享缓存，命中缓存后直接返回而不再执行业务。
 
 ```
 @Test
@@ -654,6 +652,7 @@ Hystrix 可以把多个请求合并为一个请求，只要它们处于相同请
 继承 `HystrixCollapser` 对象，重写相关方法，定义批量处理逻辑。
 
 ```
+// 泛型分别表示：批量处理结果类型、单次处理结果类型、请求参数类型
 public class MyCollapserCommand extends HystrixCollapser<List<String>, String, Integer> {
 
     private Integer id;
@@ -666,7 +665,7 @@ public class MyCollapserCommand extends HystrixCollapser<List<String>, String, I
     }
 
     /**
-     * 获取请求参数，业务相关
+     * 获取请求参数，这是业务相关的数据
      */
     @Override
     public Integer getRequestArgument() {
@@ -686,7 +685,9 @@ public class MyCollapserCommand extends HystrixCollapser<List<String>, String, I
      * 批量处理结果和请求之间的映射
      */
     @Override
-    protected void mapResponseToRequests(List<String> strings, Collection<CollapsedRequest<String, Integer>> collection) {
+    protected void mapResponseToRequests(
+    					List<String> strings, // 批量处理结果
+                        Collection<CollapsedRequest<String, Integer>> collection) {
         int idx = 0;
         for (CollapsedRequest<String, Integer> reqest : collection) {
             reqest.setResponse(strings.get(idx++));
@@ -695,7 +696,7 @@ public class MyCollapserCommand extends HystrixCollapser<List<String>, String, I
 }
 
 /**
- * 处理批量请求
+ * 处理批量请求逻辑
  */
 class BatchCommand extends HystrixCommand<List<String>> {
 
@@ -753,7 +754,7 @@ public void collapserTest() throws ExecutionException, InterruptedException {
 }
 ```
 
-可以在构造器进行相关配置，比如请求之间距离多近才能被合并。
+可在实例化时进行配置，比如请求之间距离多近可以被合并。
 
 ```
 public MyCollapserCommand(Integer id) {
@@ -770,7 +771,7 @@ public MyCollapserCommand(Integer id) {
 
 ## 运行隔离
 
-命令对象的运行应该相互隔离，否则单个服务的异常就有可能导致整体失败。Hystrix 支持线程和信号量两种隔离方式，线程天然具有隔离性，信号量类似计数器，相对轻量，没有线程开销，适合没有网络开销的调用。
+命令对象的运行应该相互隔离，否则单个服务失败就有可能导致系统失败。Hystrix 支持线程和信号量两种隔离方式，线程天然具有隔离性，信号量类似计数器，相对轻量，因为没有线程开销，适合没有网络开销的调用。
 
 默认使用线程隔离，底层依靠线程池实现。属性 ThreadPoolKey 指定线程池实例的名字，默认 GroupKey，线程池可配置，比如 CoreSize、MaximumSize，如下所示。
 
@@ -778,7 +779,7 @@ public MyCollapserCommand(Integer id) {
 public MyHystrixCommand(String groupName) {
     super(Setter
             .withGroupKey(HystrixCommandGroupKey.Factory.asKey(groupName))
-            .andThreadPoolKey(HystrixThreadPoolKey.Factory.asKey(groupName))
+            .andThreadPoolKey(HystrixThreadPoolKey.Factory.asKey(groupName)) // 线程池名字
             .andThreadPoolPropertiesDefaults( // 配置线程池
                     HystrixThreadPoolProperties.defaultSetter()
                             .withCoreSize(3)
@@ -804,7 +805,7 @@ public MyHystrixCommand(String groupName) {
             .withGroupKey(HystrixCommandGroupKey.Factory.asKey(groupName))
             .andCommandPropertiesDefaults(
             	HystrixCommandProperties.defaultSetter()
-                	.withExecutionIsolationStrategy( // 启用线程隔离
+                	.withExecutionIsolationStrategy( // 启用信号量隔离
                     	HystrixCommandProperties.ExecutionIsolationStrategy.SEMAPHORE)
             )
     );
@@ -814,7 +815,7 @@ public MyHystrixCommand(String groupName) {
 
 ## 服务降级
 
-Hystrix 支持服务降级，它是服务失败时的冗余处理措施，重写 `getFallback()` 进行定制。
+重写 `getFallback()`，定义冗余处理逻辑。
 
 ```
 public class MyHystrixCommand extends HystrixCommand<String> {
@@ -831,15 +832,15 @@ public class MyHystrixCommand extends HystrixCommand<String> {
 }
 ```
 
-服务降级默认拦截所有异常，除了 `HystrixBadRequestException`，这些都可以修改。
+服务降级默认拦截所有异常，除了 `HystrixBadRequestException`，当然，这些都可以修改。
 
 ## 请求熔断
 
-Hystrix 以快照时间窗为单位统计两个指标：请求总数、请求失败数量。如果时间段内请求数量达到阈值，同时失败数量达到一定比例，Hystrix 开启熔断。
+Hystrix 以时间窗为单位统计两个指标：请求总数、失败数量。如果这个时间段内请求数量达到阈值，然后失败数量也达到一定比例，Hystrix 就会开启熔断。
 
-如果 Hystrix 处于熔断，所有请求不会执行任何业务逻辑，直接调用 `fallback()`，返回失败响应。
+熔断状态，Hystrix 拒绝所有请求，直接执行 `fallback()`，参看运行流程图。
 
-默认情况，熔断 5 秒之后，Hystrix 进入半熔断状态，放行一次请求，如果执行成功，关闭熔断，否则恢复熔断。
+默认熔断 5 秒之后，Hystrix 进入半熔断状态，放行一次请求，如果请求成功执行，恢复正常，否则继续熔断。
 
 ```
 public MyHystrixCommand(String groupName) {
@@ -860,9 +861,9 @@ public MyHystrixCommand(String groupName) {
 }
 ```
 
-## 服务端集成
+## 提供者集成
 
-消费者或提供者两个端都可以使用 Hystrix，Feign 和 Zuul 支持集成 Hystrix，这是消费者端应用，它把远程调用操作当作 `run()` 修饰。这里学习提供者端使用，即把处理器方法当作 `run()` 修饰。
+消费者或提供者两个端都可以使用 Hystrix，Feign 和 Zuul 可以集成 Hystrix，这是消费者端应用，它把远程调用操作当作 `run()` 修饰。这里学习提供者端使用，把处理器方法当作 `run()` 修饰。
 
 引入依赖
 
@@ -886,11 +887,11 @@ public class Application {
 }
 ```
 
-使用 `@HystrixCommand` 标注处理器方法，表示将其当作 `run()` 进行修饰，配置服务降级。
+使用 `@HystrixCommand` 标注处理器方法，表示对其进行修饰，这里配置服务降级。
 
 ```
 /**
- * 服务降级，它的签名应该和处理器方法相同
+ * 服务降级，它的方法签名应该和处理器方法相同
  */
 public BaserResponseVO<Map<String, Object>> fallbackMethod(BasePageVO basePageVO) {
     HashMap<String, Object> map = new HashMap<>();
@@ -911,7 +912,7 @@ public BaserResponseVO<Map<String, Object>> getSomething(BasePageVO basePageVO) 
 }
 ```
 
-当然，注解 `@HystrixCommand` 还能配置熔断、隔离这些功能。
+注解 `@HystrixCommand` 还能配置熔断、隔离这些功能。
 
 ```
 @HystrixCommand(
@@ -925,7 +926,7 @@ public BaserResponseVO<Map<String, Object>> getSomething(BasePageVO basePageVO) 
 		@HystrixProperty(name = "circuitBreaker.errorThresholdPercentage", 
 			value = "50") // 失败比例阈值
 	},
-	threadPoolProperties = {
+	threadPoolProperties = { // 线程池配置
         @HystrixProperty(name = "coreSize", value = "1"),
         @HystrixProperty(name = "maxQueueSize", value = "10"),
         @HystrixProperty(name = "keepAliveTimeMinutes", value = "1000"),
@@ -965,14 +966,14 @@ public class Application {
 }
 ```
 
-通过接口定义远程调用，每个方法表示一种 HTTP 请求，属性 `name` 是标识符，`url` 是服务地址。
+使用接口定义远程调用，每个接口方法表示一种 HTTP 请求，属性 `name` 是标识符，`url` 是服务地址。
 
-> 接口方法的格式与处理器方法几乎相同，Feign 支持 Spring MVC 部分注解，为了避免错误，应该对所有请求参数使用 `@RequestParam` 注解。
+> 接口方法和对应的处理器方法几乎相同，Feign 支持 Spring MVC 部分注解，为了避免错误，所有请求参数都应该使用 `@RequestParam` 注解。
 >
 > 可用注解：`@RequestMapping`、`@RequestParam`、`@PathVariable`、`@RequestBody`。
 
 ```
-应该对所有请求参数使用 `@RequestParam` 注解。@FeignClient(name = "feignClient", url = "http://localhost:8001")
+@FeignClient(name = "feignClient", url = "http://localhost:8001")
 public interface ConsumeFeign {
 
     @GetMapping("/providers/{who}")
@@ -980,7 +981,7 @@ public interface ConsumeFeign {
 }
 ```
 
-处理器方法，使用接口类型进行远程调用，可见 Feign 使用动态代理创建接口类型对象。
+处理器方法，使用 `@FeignClient` 接口类型进行远程调用，Feign 使用动态代理技术创建实例。
 
 ```
 @Slf4j
@@ -1014,7 +1015,7 @@ public class ConsumerController {
 
 ### 优先实现
 
-Feign 通过动态代理自动创建的接口类型对象，默认会被 `@Primary` 标注，可以修改属性 `primary=false` 移除优先注解，然后就能自动装配自己的接口实现。
+动态代理创建的 `@FeignClient` 接口类型实例默认被 `@Primary` 标注，修改属性 `primary = false` 表示移除优先注解，然后就能自动装配自己的接口实现。
 
 ```
 @FeignClient(name = "provider", url = "http://localhost:8001", primary = false)
@@ -1025,7 +1026,7 @@ public interface ConsumeFeign {
 
 ### 自定配置
 
-默认行为已经足以解决大部分问题，Feign 提供可配置项以支持部分配置。
+默认行为已经足以解决大部分问题，Feign 提供可配置项以支持局部定制。
 
 | 配置选项      | 说明和默认                                                   |
 | ------------- | ------------------------------------------------------------ |
@@ -1067,7 +1068,7 @@ public interface ConsumeFeign {
 
 ### 负载均衡 Ribbon
 
-Feign 可与 Ribbon 整合，只需修改 `@FeignClient` 属性 `name`/`value` 为服务名，删除 `url` 属性。现在，这个接口的远程调用就会使用 Ribbon 负载均衡。
+Feign 可与 Ribbon 整合，修改 `@FeignClient` 属性 `name`/`value` 为服务名，删除 `url` 属性。现在，这个接口的远程调用就会使用 Ribbon 负载均衡。
 
 ```
 @FeignClient(name = "provider")
@@ -1086,7 +1087,7 @@ feign.hystrix.enabled = true
 
 **Fallback**
 
-实现 `@FeignClient` 接口，重写方法编写服务降级逻辑。
+实现 `@FeignClient` 接口，重写方法定义服务降级逻辑。
 
 ```
 @Component
@@ -1099,7 +1100,7 @@ public class ConsumeFeignFallback implements ConsumeFeign {
 }
 ```
 
-通过 `fallback` 属性为 `@FeignClient` 接口的所有远程调用设置服务降级。
+使用 `fallback` 属性为 `@FeignClient` 接口的所有远程调用设置服务降级。
 
 ```
 @FeignClient(..., fallback = ConsumeFeignFallback.class)
@@ -1128,7 +1129,7 @@ public class ConsumeFeignFallbackFactory implements FallbackFactory<ConsumeFeign
 }
 ```
 
-修改 `@FeignClient` 属性 `fallbackFactory`，指定服务降级的工厂类。这是工厂模式的实现。
+修改 `@FeignClient` 属性 `fallbackFactory`，指定服务降级的工厂类，这是工厂模式的实现。
 
 ```
 @FeignClient(..., fallbackFactory = ConsumeFeignFallbackFactory.class)
@@ -1145,7 +1146,7 @@ public interface ConsumeFeign {
 
 Feign 默认使用 JDK 工具进行 HTTP 通信，它的性能不高，Feign 支持更改底层通信工具，以下是简单演示。
 
-引入依赖，Apache HttpClient 目前是性能最高的 HTTP 工具，它能显著提升通信效率。
+引入依赖，Apache HttpClient 目前是性能最高的 HTTP 客户端，它能显著提升通信效率。
 
 ```
 <dependency>
@@ -1164,32 +1165,32 @@ feign:
 
 **压缩数据**
 
-Feign 内置支持 Gzip 解压缩传输数据，压缩不一定提升性能，解压缩的耗时可能大于节省的网络传输时间。
+Feign 内置支持 Gzip 解压缩传输数据，压缩不一定提升性能，因为解压缩的耗时可能大于节省的网络传输时间。
 
 ```
 feign:
   compression:
-    request: # 请求压缩
-      enabled: true
+    request: # 压缩请求
+      enabled: true # 开启
       mime-types: text/xml,application/xml,application/json # 支持压缩的数据类型
-      min-request-size: 2048 # 进行压缩的最小数据大小
-    response: # 响应压缩
+      min-request-size: 2048 # 使用压缩的最小数据大小
+    response: # 压缩响应
       enabled: true
 ```
 
 **接口继承**
 
-某个服务可能被多个服务使用，而它的调用方式在不同服务没有区别，如果每个服务都独自编写一套 Feign 调用接口，实在有点冗余，并且也不方便后期修改调用接口。
+某个服务可能被多个消费者使用，但它的调用方式无论在哪都差不多，如果每个消费者都要编写一套 Feign 调用接口，实在有点代码冗余，并且也不方便后续的统一修改。
 
-`@FeignClient` 接口可以继承**一个**普通接口，所以，我们可以在一个公共普通接口声明远程调用方法，这个方法以及它的 Spring MVC 注解都可以被继承。现在，如果想要调用服务，创建 `@FeignClient` 接口并且继承这个服务的公共调用接口即可。这样可以省去大量重复代码，同时方便后期修改调用方法。
+`@FeignClient` 接口可以继承**一个**普通接口，所以，用户可以在一个公共普通接口声明远程调用方法，这些方法以及它们的 Spring MVC 注解都会被继承。现在定义远程调用，创建 `@FeignClient` 接口并且继承对应的公共普通接口即可。这会省去大量重复代码，并且方便统一修改。
 
 # 服务网关 Zuul
 
-Zuul 是 Spring Cloud Netflix 系列组件，提供网关服务，用于筛选请求以及调用正确的服务返回响应，可以把它看作过滤器的集合。
+Zuul 是 Spring Cloud Netflix 系列组件，用于网关，负责筛选和路由请求，可以把它看作过滤器的集合。
 
-用户使用 URL 表达式定义路由规则，规定请求应该使用什么服务响应，如果请求有匹配，Zuul 使用 Ribbon 调用远程服务，然后返回响应。所以，Zuul 需要集成 Eureka 和 Ribbon。另外，Zuul 还能集成 Hystrix，设置调用端服务降级。
+用户使用 URL 表达式定义路由规则，规定匹配的请求应该路由到哪个服务，Zuul 使用 Ribbon 调用远程服务并封装返回作为响应。所以，Zuul 需要集成 Eureka 和 Ribbon。Zuul 还能集成 Hystrix，设置调用端服务降级。
 
-Zuul 自动过滤一些非安全的信息，比如 Cookie、Authorization 字段，可用 `zuul.sensitive-headers` 属性设置敏感字段。
+Zuul 会过滤请求的一些非安全信息，比如 Cookie、Authorization 字段，可用 `zuul.sensitive-headers` 属性自定义屏蔽字段，覆盖默认行为。
 
 ## 初步使用
 
@@ -1204,7 +1205,7 @@ Zuul 自动过滤一些非安全的信息，比如 Cookie、Authorization 字段
 <!-- Eureka、Ribbon、Hystrix -->
 ```
 
-启用服务，此处不需 Eureka Client
+启用服务，不需开启 Eureka Client
 
 ```
 @EnableZuulProxy
@@ -1222,10 +1223,10 @@ public class Application {
 ```
 zuul:
   prefix: "/prefix" # URI前缀
-  routes: 
-    film-service: # 服务名
-      path: "/film-api/**" # 路由规则
-  ignored-services: # 禁止使用服务名进行URI匹配
+  routes: # 路由规则
+    film-service: # 服务名字
+      path: "/film-api/**" # URI匹配
+  ignored-services:
     film-service
 ```
 
@@ -1235,7 +1236,7 @@ zuul:
 
 ## 运行流程
 
-Zuul 基于 Servlet + Filter 结构，非常简单。Zuul Servlet 负责接收请求并管理请求处理流程，Zuul Runner 管理过滤器，它把请求按序交给正确的过滤器处理。Zuul 有 3 种类型过滤器，Routing Filters 负责路由，它会调用远程服务并封装响应，Pre 用于路由前处理，Post 用于路由后处理，它们都能影响请求和响应。
+Zuul 基于 Servlet + Filter 结构，非常简单。Zuul Servlet 负责接收请求并管理请求处理流程，Zuul Runner 管理过滤器，它把请求按序交给匹配的过滤器处理。Zuul 有 3 种类型过滤器，Routing Filters 负责路由，它会调用远程服务并封装响应，Pre 用于路由前处理，Post 用于路由后处理，它们都能影响请求和响应。
 
 `RequestContext` 是 Zuul 对请求的进一步封装，它的重要特性是线程安全。
 
@@ -1245,7 +1246,7 @@ Zuul 过滤器的执行顺序和生命周期，Origin Server 表示远程服务�
 
 ![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/netflix-cloud-9cd1484e.png)
 
-Zuul 包含大量内置过滤器，用于支持各种功能。
+Zuul 内置许多过滤器，用于支持各种功能。
 
 | 过滤器                    | 说明                                                         |
 | ------------------------- | ------------------------------------------------------------ |
@@ -1255,7 +1256,7 @@ Zuul 包含大量内置过滤器，用于支持各种功能。
 
 ## 自定过滤
 
-继承 `ZuulFilter` 实现自己的过滤器，把它注册为 Bean 就能进行启用。可以发现，`RequestContext` 类似线程本地变量，可以随时获取。
+继承 `ZuulFilter` 实现自己的过滤器，把它注册为 Bean 就能进行启用。可以发现，`RequestContext` 类似线程本地变量，难怪它是线程安全。
 
 ```
 @Slf4j
@@ -1314,7 +1315,7 @@ public class MyFilter extends ZuulFilter {
 public class MyFallBack implements FallbackProvider {
 
     /**
-     * 针对哪个路由包装路由降级
+     * 针对哪些路由修饰
      */
     @Override
     public String getRoute() {
