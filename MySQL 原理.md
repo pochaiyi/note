@@ -462,7 +462,7 @@ COMPACT 使用 NULL 值列表标记值为 `null` 的字段，真实数据处则�
 | 隐藏列      | 必需 | 大小   | 说明                            |
 | ----------- | ---- | ------ | ------------------------------- |
 | db_row_id   | 否   | 6 byte | 记录 ID，表内唯一标识一条记录。 |
-| db_trx_id   | 是   | 6 byte | 事务 ID                         |
+| db_trx_id   | 是   | 6      | 事务 ID                         |
 | db_roll_ptr | 是   | 7 byte | 回滚指针                        |
 
 COMPACT 对 `char(M)` 字段的处理有些特殊。如果字符集对每个字符都固定使用 N 个字节编码，那么这个字段固定占用 M*N 个字节，空闲空间空格补齐。如果字符集是变长编码，COMPACT 就把它视为变长字段，需要记录真实数据的长度，这个字段至少占用 M 个字节，这能减少空间的再分配，降低空间碎片的产生概率。
@@ -882,7 +882,7 @@ INODE 页面保存段的相关属性，比如包含的零散页的地址以及�
 
 SYS_TABLES 、SYS_COLUMNS 、SYS_INDEXES 、SYS_FIELDS 这 4 个表称为基本系统表，最为重要，通过它们可以获得任何其它系统表和用户表的元数据。怎么找到基本系统表？这没办法了，只能硬编码，页号为 7 的页面保存着这 4 个表的聚簇索引和二级索引对应的 B+ 树的根页面。
 
-以下是页号为 7 的页的结构图，可以发现，它还管理着下一个可分配的列、表、索引、表空间的 ID 编号。
+以下是页号为 7 的页的结构图，可以发现其管理着下一个隐藏列、表、索引、表空间的 ID 编号。
 
 ![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-5036dad2.jpg)
 
@@ -1092,7 +1092,7 @@ InnoDB 会为 Free 链表定义一个基结点，其中记录头结点、尾结�
 
 修改缓冲页的数据之后，它的内容就和磁盘页不一致，这种缓冲页称为**脏页**。为了保证数据一致，最简单的做法是每发生一次修改就立即同步到磁盘，但这会产生大量 I/O 影响性能。所以，脏页不会立即刷盘，而是在未来某个时间点统一进行磁盘同步。
 
-为了快速知道哪些缓冲页是脏页，InnoDB 会创建一个链表，称作 Flush 链表，凡是修改过的缓冲页对应的控制块都会作为一个结点插入这个链表。
+为了快速知道哪些缓冲页是脏页，InnoDB 会创建一个链表，称作 Flush 链表，凡是修改过的缓冲页对应的控制块都会作为一个结点插到这个链表的头部，如果已被插入则什么都不做。
 
 如果一个缓冲页空闲，那它肯定不在 Flush 链表，如果一个缓冲页是脏页，那它肯定不在 Free 链表，所以，控制块不可能既是 Free 结点，又是 Flush 结点。
 
@@ -1164,9 +1164,205 @@ MySQL 5.7.5 以前，Buffer Pool 还不能动态调整大小，那时 Buffer Poo
 
 # 重做日志 Redo
 
+## Redo 初步认识
 
+页面的修改首先只会影响 Buffer Pool 中的缓冲页，如果这时服务崩溃并且缓冲页还未刷盘，那么事务所做的修改将会丢失，为了保证事务的持久性，简单的办法是每次修改页面之后就立即刷盘，很明显这会造成大量刷盘且大多还都是随机 I/O，严重影响数据库性能。
 
-# 未作日志 Undo
+为此，InnoDB 提供 Redo 日志用于记录页面的修改，每一个页面修改都对应一条 Redo 日志记录，相较而言日志只占用非常小空间，所以它的刷盘代价非常低，并且日志是顺序写入，那么速度就更快了。MySQL 服务启动时会读取 Redo 日志文件，然后根据日志记录恢复那些尚未持久化的修改。
+
+## Redo 日志格式
+
+**通用结构**
+
+Redo 日志其实只是记录一下事务对数据库做了哪些修改，日志有许多类型以适应不同的修改场景，绝大部分日志都有以下通用结构，其中 type 表示日志类型，space ID 表空间 ID，page number 页号，data 具体修改内容。
+
+![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-c49f1ab3.jpg)
+
+**简单 Redo 日志**
+
+对于简单的页面修改，比如为某条记录的某个字段赋新的值，Redo 日志只需记录一下在这个页面指定偏移量处有多少字节内容被修改，以及具体修改内容，这种日志称为物理日志。InnoDB 根据修改内容的多少划分处多种物理日志类型：
+
+* MLOG_1BYTE：表示在页面某个偏移量处写入 1 个字节修改内容；
+* MLOG_2BYTE：表示在页面某个偏移量处写入 2 个字节修改内容；
+* ...
+* MLOG_WRITE_STRING：表示在页面某个偏移量处写入多个字节修改内容。
+
+简单理解，InnoDB 可以直接根据物理日志 data 内容来恢复数据，没有任何多余操作。
+
+**复杂 Redo 日志**
+
+然而，页面修改往往比较复杂，通常牵一发而动多处，比如插入一条记录，可能要修改多个索引 B+ 树，若叶结点要进行页分裂，那么还需向内结点添加目录项记录，甚至进行内结点的页分裂，另外还需修改各种数据库内部统计信息，比如槽位、页面空间使用量、表空间管理信息等等。
+
+怎么记录这种复杂修改呢？对每一处修改都使用一条 Redo 日志？很明显这会产生大量日志，严重浪费空间；或者使用日志 data 部分囊括一个页所有修改内容？那 data 部分将会巨大无比，同样非常浪费空间。
+
+为此，InnoDB 设计了一些日志类型，除了修改内容，这些日志还会记录一些维护数据库正确性必须的属性，比如前一条记录的位置（用于更新页内单向链表），这类日志称为逻辑日志。服务启动时，InnoDB 将会通过调用函数并将逻辑日志包含的属性作为参数来恢复数据。
+
+## Mini-Transaction
+
+**按组写入日志**
+
+语句的执行过程可能会修改多个页面，对应生成多条 Redo 日志，这些日志会被 InnoDB 按照规则划分成多个不可分割的组。所谓"不可分割"，是指同组的日志要么全部恢复，要么一条都不使用。这么做的原因很明显，既然语句产生的效果由多条日志记录，那么数据库恢复时当然要把它们一起执行，否则会恢复成错误状态。
+
+怎么记录分组呢？已知 Redo 日志按序存储，InnoDB 会在每组结尾添加一个 LOG_MULTI_REC_END 日志，这种类型日志只有一个 type 字段，它的作用只是标记前面那些 Redo 日志属于同一个组。数据库只有解析到这个类型日志才会进行恢复，否则直接放弃前面所有日志。
+
+很多原子性操作只有一条日志，如果这时还用 LOG_MULTI_REC_END 标记，实在有点浪费空间。日志 type 字段拥有 1 byte 空间，但 7 bit 足以表示所有类型，所以 InnoDB 就用 type 第一个 bit 表示这条记录独自一个分组
+
+**最小事务日志（Mini-Transaction）**
+
+MySQL 把对底层页面进行一次原子访问的过程称为一个 Mini-Transaction（MTR），根据前文可知一个 MTR 应该包含一组 Redo 日志。
+
+事务可以包含若干条语句，每一条语句可以包含若干个 MTR，每一个 MTR 可以包含若干条 Redo 日志。
+
+![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-b4e04c0c.jpg)
+
+## Redo 日志缓冲
+
+**认识 Block**
+
+Redo 日志记录同样以页为管理单位，它用的这种页通常称为 block，大小 512 字节，结构如下所示。
+
+![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-4b19102a.jpg)
+
+可见 block 就是一个简单的页面，body 部分存放 Redo 日志记录，header 和 trailer 存放管理信息，前者属性如下表所示，后者只有一个 LOG_BLOCK_CHECKSUM 属性，用于校验页面完整性。
+
+| 属性                      | 大小   | 说明                                    |
+| ------------------------- | ------ | --------------------------------------- |
+| LOG_BLOCK_HDR_NO          | 4 byte | block 编号                              |
+| LOG_BLOCK_HDR_DATA_LEN    | 2 byte | 已经使用了多少个字节，初始 12，写满 512 |
+| LOG_BLOCK_FIRST_REC_GROUP | 2 byte | block 中第一个 MTR 的偏移量             |
+| LOG_BLOCK_CHECKPOINT_NO   | 4 byte | checkpoint 序号                         |
+
+**日志缓冲池**
+
+自然，Redo 日志也有缓冲页机制，InnoDB 会向系统申请一大片连续内存，称为 redo log buffer，这个空间会被划分成若干个 block 页。可以通过配置参数 innodb_log_buffer_size 指定 log buffer 大小，默认 16 MB。
+
+**写入缓冲池**
+
+向 redo log buffer 写日志是顺序进行，前面 block 会先被写满，InnoDB 提供一个全局变量 buf_free，指示后续日志应该从缓冲区哪个位置开始写。
+
+![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-1ff38a11.jpg)
+
+MTR 可能产生多条日志，这些日志是一个不可分割的组，所以并不是每产生一条日志就把它写到缓冲区中，而是先把 MTR 运行过程中产生的日志存到一个地方，等到 MTR 结束时再把这组日志复制到 log buffer。因为不同事务可以交替执行，而 Redo 日志按组写入，所以不同事务的 MTR 可能会交替写入缓冲区。
+
+## Redo 日志文件
+
+**日志刷盘时机**
+
+Redo 日志缓冲池毕竟容量有限，因此 redo log buffer 会在一些情况下自动刷盘，比如：
+
+* 空间不足：InnoDB 认为如果 Redo 日志占用缓冲池一半左右空间，那就需要刷盘；
+* 事务提交：为了保证事务持久性，这样 Buffer Pool 就不必立即刷盘；
+* 后台线程：InnoDB 有一个后台线程，大约每秒都会对 redo log buffer 刷盘；
+* 停止服务：正常关闭数据库；
+* 做 checkpoint 时。
+
+**日志刷盘选项**
+
+前面提到 Redo 缓冲区会在事务提交时自动刷盘，这条策略有点激进会严重影响性能，为此 InnoDB 提供一个系统变量 innodb_flush_log_at_trx_commit，用于调整刷盘策略，它有 3 个可选值：
+
+* 0：事务提交时不自动刷盘，而是交给后台线程完成，无法保证事务持久性，性能最优；
+* 1：默认，事务提交时立即刷盘，可以保证事务持久性，严重影响性能；
+* 2：事务提交时把日志写到操作系统缓冲区，系统宕机时无法保证事务持久性，性能介中。
+
+**日志文件组**
+
+数据目录下默认有两个文件：ib_logfile0 和 ib_logfile1，Redo 缓冲区的日志默认会刷新到这两个文件之中，以下是一些相关配置参数：
+
+* innodb_log_group_home_dir：指定 Redo 日志文件所在目录，默认数据目录；
+* innodb_log_file_size：指定每个 Redo 日志文件大小，默认 48 MB；
+* innodb_log_files_in_group：指定 Redo 日志文件数量，默认 2，最大值 100。
+
+可以发现，Redo 日志文件可有多个，而且大小都一致。Redo 日志按序循环存储，即先写 ib_logfile0，如果这个文件写满，就接着向 ib_logfile1 写，同样，如果 ib_logfile1 写满就接着向 ib_logfile2 写，如果写满最后一个文件该怎么办呢？那就回到第一个文件 ib_logfile0 覆盖写入，旧日志为什么可以被覆盖呢？这是 checkpoin 内容。
+
+**日志文件格式**
+
+Redo 日志文件自然是与 reo log buffer 结构一致，即由 block 组成，刷盘其实就是把 Redo 缓冲区的 block 缓冲复制到日志文件。
+
+每个 Redo 日志文件都可看作由两个部分组成：前 4 个 block（2048 字节）存储管理信息，其后所有空间都用于储存 redo log buffer 中的 block 镜像。普通 block 前面已经讲过，这里分析一下前 4 个 block：log file header、checkpoint1、尚未使用、checkpoint2。
+
+![](https://images-1305875271.cos.ap-chengdu.myqcloud.com/mysql-2dcdcb99.jpg)
+
+以下列举 log file header 保存的信息，都是一些 Redo 日志文件的整体属性。
+
+| 属性                 | 大小（字节） | 说明                                       |
+| -------------------- | ------------ | ------------------------------------------ |
+| LOG_HEADER_FORMAT    | 4            | Redo 日志版本                              |
+| LOG_HEADER_PAD1      | 4            | 填充空白，没有意义                         |
+| LOG_HEADER_START_LSN | 8            | 该 Redo 日志文件的开始 LSN 值              |
+| LOG_HEADER_CREATOR   | 32           | 该 Redo 日志文件由谁创建，默认数据库版本号 |
+| LOG_BLOCK_CHECKSUM   | 4            | 页的正确性校验                             |
+
+以下列举 checkpoint1 保存的信息，都是一些 checkpoint 相关的属性，checkpoint2 与 checkpoint1 完全一样。
+
+| 属性                        | 大小（字节） | 说明                                                        |
+| --------------------------- | ------------ | ----------------------------------------------------------- |
+| LOG_CHECKPOINT_NO           | 8            | 服务器做 checkpoint 的编号                                  |
+| LOG_CHECKPOINT_LSN          | 8            | 服务器在结束 checkpoint 时的 LSN 值，系统恢复时将从该值开始 |
+| LOG_CHECKPOINT_OFFSET       | 8            | 上一个属性的 LSN 值在 Redo 日志文件组的偏移量               |
+| LOG_CHECKPOINT_LOG_BUF_SIZE | 8            | 服务器做 checkpoint 时的 redo log buffer 的大小             |
+| LOG_BLOCK_CHECKSUM          | 4            | 页的正确性校验                                              |
+
+## Log Sequeue Number
+
+**Log Sequeue Number**
+
+MySQL 运行之后就不断修改页面，意味着会不断生成 Redo 日志，Redo 日志量只会增加。InnoDB 提供一个全局变量记录已经写入缓冲区的 Redo 日志量，称为 Log Sequeue Number（LSN），初始值 8704。
+
+InnoDB 是以 MTR 生成的一组日志为单位向 log buffer 写入日志，而且具体写在 block body，LSN 计算值时会把中间跨越的 block header 和 block trailer 两个部分加上。这样来看，LSN 更像是指向 log buffer 空闲空间开始位置的指针，只是初始值不为 0 而已。日志组写入完成时对应一个 LSN 值表示结束位置，值越小则日志越早产生。
+
+**LSN 对应日志文件偏移量**
+
+因为 redo log buffer 与 Redo 日志文件结构几乎相同，所以，可以很轻易地计算某一个 LSN 值在 Redo 日志文件组的偏移量，LSN 初始 8704 对应 Redo 日志文件组偏移量 2048，因为文件前 4 个 block 影响，当然，后面每个日志文件都有 4 个 block 干扰，不多详述。
+
+**Flush 链表中的 LSN 属性**
+
+每个 MTR 结束时除了要把日志组写到 log buffer，另外还得把修改的页面插到 Flush 链表，缓冲页控制块有两个属性用于记录 LSN 值，它们分别是：
+
+* oldest_modification：缓冲页被加载之后，第一次修改该页的 MTR 的 LSN 值（结束 LSN 值）；
+* newest_modification：最近一次修改该缓冲页的 MTR 的 LSN 值
+
+现在，复述一次 Flush 更新过程：首先加载磁盘页为缓冲页，填充控制块信息；有一个 MTR 修改页面，结束时更新控制块的两个 LSN 属性，然后将其插到 Flush 链表头部；过一段时间，又有一个 MTR 修改该页，结束时更新控制块 newest_modification 属性，但不修改其在 Flush 链表的位置和 oldest_modification 属性，所以 Flush 链表是按照首次修改时间排序，越靠后越先发生修改。
+
+## checkpoint
+
+为了节省空间，InnoDB 选择循环使用 Redo 日志文件组，这么做可能会使旧日志被新日志覆盖。Redo 日志只是为了系统崩溃后恢复脏页使用，若脏页已被刷盘，那么对应的日志就不再需要，其所占用的空间就可以被新的日志重用。所以，判断 Redo 日志可以被覆盖的依据是它对应的脏页是否被刷盘。
+
+为此，InnoDB 提供一个全局变量 checkpoint_lsn，表示可被覆盖的日志量，或者说已被刷盘的日志量，其初始值自然也是 8704，凡是 LSN 小于该值的 Redo 日志都可以被覆盖。假设现在刷盘一个脏页，那么其对应 Redo 日志就可以被覆盖，checkpoint_lsn 将会根据脏页对应的 Redo 日志增值，这个过程称为"执行一次 checkpoint"。
+
+执行一次 checkpoint 可以分为两个步骤：
+
+* 计算 checkpoint_lsn 新值，其实就是获取 Flush 链表尾结点的 oldest_modification 属性；
+* 将 checkpoint_lsn、对应 Redo 日志文件组偏移量，以及 checkpoint_no 写到 Redo 日志文件管理信息。
+
+InnoDB 维护有一个变量记录系统做过多少次 checkpoint，称为 checkpoint_no，每做一次 checkpoint，这个变量就加 1。虽然每个 Redo 日志文件都有 4 个 block 管理信息，但是上述 checkpoint 信息只会被写到第一个日志文件。如果 checkpoint_no 是偶数，就把 checkpoint 信息写到 checkpoint1，否则写到 checkpoint2。
+
+> 刷盘脏页的后台线程与执行 checkpoint 的线程不是同一个线程，所以 checkpoint_lsn 具有滞后性。
+
+## 崩溃恢复过程
+
+**确定恢复启点**
+
+前面提到 checkpoint_lsn 前的 Redo 日志都可以被覆盖，因为这些日志对应的脏页已经被刷盘，所以不需要使用日志来恢复页面。Redo 日志文件有两个地方保存 checkpoint_lsn：checkpoint1 和 checkpoint2，InnoDB 将会选择 checkpoint_no 更大的那个，获得最新 checkpoint_lsn 和对应文件偏移量，以它作为恢复启点。
+
+**确定恢复终点**
+
+至于终点，InnoDB 会从 block 结构着手，前面提到 Redo 日志文件是顺序存储，只有前一个 block 写满才会继续写下一个 block，普通 block 的 header 部分有一个 LOG_BLOCK_HDR_DATA_LEN 属性，表示当前 block 已经使用了多少个字节，blcok 写满时值为 512，如果不为 512，说明这是最后一个 block，那它就是此次恢复的终点。
+
+**日志使用优化**
+
+确定需要使用的 Redo 日志范围之后，直接按序扫描即可，但 InnoDB 还有一些优化用于加快恢复速度：
+
+* 使用哈希表
+
+  可能有多条 Redo 日志记录同一个页面的修改，如果这些日志位置比较分散，按序执行的话同一个页面就需要反复打开和修改，这当然会影响性能。
+
+  为此，根据 Redo 日志 space ID 和 page number 计算哈希值，把同一个页面的日志集中在一起，槽内日志按先后顺序链接。现在只需遍历哈希表，每个页面只用打开一次就能完全恢复。
+
+* 跳过已经刷盘的页面
+
+  刷盘和 checkpoint 异步执行，所以可能发生脏页已被刷盘，但是 checkpoint_lsn 没来得及同步，这时又怎么判断页面是否需要进行恢复呢？Index 页的 File Header 部分有一个属性 FIL_PAGE_LSN，表示最近一次修改该页的 MTR 的 LSN 值，其实就是控制块 newest_modification 属性。如果页面在最后一次 checkpoint 之后有被刷盘，它的 FIL_PAGE_LSN 应该大于 checkpoint_lsn 值，符合这种情况的页就不需使用那些 LSN 值小于 FIL_PAGE_LSN 的 Redo 日志，加快恢复速度。
+
+# 未做日志 Undo
 
 
 
