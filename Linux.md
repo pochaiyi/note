@@ -761,6 +761,20 @@ stat 文件
 grep <参数> 关键字 文本源
 ```
 
+### 文本统计 wc
+
+统计指定文本的行数、字数、字节数，参数 -l 显示行数，参数 -w 显示单词数，参数 -c 显示字节数。
+
+```
+wc <参数> 文本
+```
+
+示例，统计当前系统有多少个用户，文件 */etc/passwd* 保存系统用户信息。
+
+```
+wc -l /etc/passwd
+```
+
 ### 按列过滤 cut
 
 按列筛选文本，参数 -f 指定显示第几列，参数 -d 指定列的分隔符。
@@ -1782,7 +1796,7 @@ echo `date` >> /dev/null
 
 脚本的执行有两种方式，第一种方式，调用 Shell 解释器的命令，比如 "bash 文件"。第二种方式，直接输入脚本文件的路径，系统会调用对应 Shell 解释器执行脚本，但用户需拥有该文件的可执行权限
 
-## 参数和输入
+## 命令参数
 
 **参数变量**
 
@@ -1892,16 +1906,44 @@ for 变量 in 取值列表
 done
 ```
 
-示例，按行读取文件内容。
+示例，按行输出文本文件内容
 
 ```
-for VAR in ~/filename
+for item in ~/filename
+	do echo $item
+done
 ```
 
-或者，使用 cat 命令读取文件，然后赋给集合变量。
+示例，依次输出列出的几个值
 
 ```
-VAR = `cat ~/filename`
+for item in 1 3 5 cat dog
+	do echo $item
+done
+```
+
+示例，依次输出 1 到 5 的值
+
+```
+for item in {1..5}
+	do echo $item
+done
+```
+
+示例，依次输出 1 到 10 的值，间隔值为 2
+
+```
+for item in {1..10..2}
+	do echo $item
+done
+```
+
+示例，输出当前目录下的所有文件和文件夹
+
+```
+for file in $(ls)
+	do echo $file
+done
 ```
 
 ### 条件循环 while
