@@ -497,21 +497,13 @@ JDK 7 引入 `Path` 接口和 `Files` 类，用于管理、操作文件，它们
 >
 > * `Path resolve(Path|String other)`
 >
->   `Path resolve(String other)`
+>   若 *other* 是绝对路径，直接返回，否则，使用 *this* 连接 *other* 再返回。
 >
->   若 *other* 是绝对路径，直接返回，否则连接 *other* 再返回。
->
-> * `Path resolveSibling(Path other)`
->
->   `Path resolveSibling(String other)`
+> * `Path resolveSibling(Path|String other)`
 >
 >   若 *other* 是绝对路径，直接返回，否则，使用父路径连接 *other* 再返回。
 >
->   返回 `this` 的父路径连接 `other` 获得的路径。
->
->   连接 *other* 再返回。
->
-> * `Path relativize(Path other)`：返回 *other* 相对于 *this* 的路径。
+> * `Path relativize(Path other)`：返回相对路径，*this* 连接返回等于 *other*。
 >
 > * `Path normalize()`：移除冗余部件。
 >
