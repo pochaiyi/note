@@ -841,3 +841,48 @@ Maven 父模块与普通项目没有区别，但它的打包方式必须设为 `
     </pluginManagement>
 </build>
 ```
+
+# 灵活的构建
+
+## Maven 属性
+
+Maven 具有属性功能，便于获取项目有关的值和常用的值，这些属性有的内置，有的自定义，分为 6 种：
+
+* 自定义属性：使用 `properties` 元素定义，POM 文档内通过 `${属性名字}` 引用；
+
+  ```
+  <project>
+      <properties>
+          <spring-cloud.version>Hoxton.SR12</spring-cloud.version>
+      </properties>
+  
+      <dependencyManagement>
+          <dependencies>
+              <dependency>
+                  <groupId>org.springframework.cloud</groupId>
+                  <artifactId>spring-cloud-dependencies</artifactId>
+                  <version>${spring-cloud.version}</version>
+                  <type>pom</type>
+                  <scope>import</scope>
+              </dependency>
+          </dependencies>
+      </dependencyManagement>
+  </project>
+  ```
+
+* 内置属性：常用的有两个，*${basedir}* 项目根目录，*${version}* 项目版本；
+
+* POM 属性：引用 POM 元素的值，例如 *${project.artifactId}* 对应 *\<project>\<artifactId>* 元素的值；
+  * `${project.build.directory}`：构建输出目录，默认 *target/*；
+  * `${project.build.sourceDirectory}`：主代码目录，默认 *src/main/java/*；
+  * `${project.build.testSourceDirectory}`：测试代码目录，默认 *src/test/java/*；
+  * `${project.outputDirectory}`：主代码编译输出目录，默认 *target/classes/*；
+  * `${project.testOutputDirectory}`：测试代码编译输出目录，默认 *target/test-classes/*；
+  * `${project.groupId}`：项目 groupId；
+  * `${project.artifactId}`：项目 artifactId；
+  * `${project.version}`：项目 version；
+  * `${project.build.finalName}`：输出文件名字，默认 *${project.artifactId}-${project.version}*。
+
+* Settings 属性：引用 *settings.xml* 中 XML 元素的值，比如 *${settings.localRepository}* 表示本地仓库地址；
+* Java 系统属性：引用 Java 系统属性，比如 *${user.home}* 表示用户目录；
+* 环境变量属性：引用系统环境变量，比如 ${env.JAVA_HOME} 表示 JAVA_HOME 环境变量的值。
