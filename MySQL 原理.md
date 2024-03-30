@@ -1802,17 +1802,19 @@ InnoDB 把系统中所有 ReadView 按创建时间连成一个链表，后台有
 
 # 单表访问方法
 
-已知 MySQL 有一个优化器模块，查询语句经过语法解析后被交给优化器处理，生成一个执行计划，其中包含应该使用哪些索引，表之间的连接顺序等，最后 MySQL 按照计划调用存储引擎接口获得结果。本章先来了解怎么执行单表查询，即 FROM 子句中只有一个表。
+已知 MySQL 有一个优化器模块，查询语句经过语法解析后被交给优化器处理，生成一个执行计划，其中包括应该使用哪个索引，表间的连接顺序等。最后 MySQL 按照计划调用存储引擎的接口，得到结果。
+
+本章先来了解单表查询如何运行，即 FROM 子句中只有一个表。
 
 ## 访问方法
 
-查询语句本质是一种声明式的语法，它只告诉数据库要获取什么样的数据，至于如何实现则毫不关心。MySQL 把执行查询语句的方式称为访问方法（access method）。同一个查询可以使用多种不同的访问方法执行，虽然结果相同，但执行成本可能差距很大。
+查询语句本质是一种声明式的语法，只是告诉数据库要获取什么样的数据，至于如何实现则毫不关心。MySQL 把执行查询语句的方式称为访问方法（access method）。同一个查询可以使用多种不同的访问方法执行，虽然结果相同，但执行成本可能差距很大。
 
 假设有一个表 *single_table*，主键 *id*，二级索引 *key1*、*key3*，唯一二级索引 *key2*，联合索引 *key_part1* 、*key_part2* 、*key_part3*。
 
 ### const
 
-通过等值比较主键或者唯一二级索列与一个常数，以此定位**一条**记录，这种访问方法称为 const。如果索引由多个列组成，则每个索引列都需与常数进行等值比较。
+通过等值比较主键或者唯一二级索列与一个常数，依次定位**一条**记录，这种访问方法称为 const。如果索引由多个列组成，则每个索引列都需与常数进行等值比较。
 
 ```
 SELECT * FROM single_table WHERE key2 = 3841;
@@ -1828,7 +1830,7 @@ SELECT * FROM single_table WHERE key2 IS NULL;
 
 ### ref
 
-通过等值比较二级索引与一个常数，以此定位记录，对应**一个**单点扫描区间，每查到一条符合条件的索引记录就要进行回表，这种访问方法称为 ref。对于联合索引，需要满足最左边连续的列与常数进行等值比较。
+通过等值比较二级索引与一个常数，以此执行查询，对应**一个**单点扫描区间，每查到一条符合条件的索引记录就要进行回表，这种访问方法称为 ref。对于联合索引，需要满足最左边连续的列与常数进行等值比较。
 
 ```
 SELECT * FROM single_demo WHERE key1 = 'abc';
@@ -1838,7 +1840,7 @@ SELECT * FROM single_demo WHERE key1 = 'abc';
 
 ### ref_or_null
 
-除了等值比较二级索引与一个常数，还要判断是否为 NULL，对应一个单点扫描区间和 `[NULL,NULL]`，索引树会把 NULL 值记录存放在前边结点。
+除了等值比较二级索引与一个常数，还需判断是否为 NULL，对应一个单点扫描区间和 `[NULL,NULL]`，B+ 树会把 NULL 值记录放在前面，所以 `[NULL,NULL]` 区间很容易找到。
 
 ```
 SELECT * FROM single_demo WHERE key1 = 'abc' OR key1 IS NULL;
@@ -1850,7 +1852,7 @@ SELECT * FROM single_demo WHERE key1 = 'abc' OR key1 IS NULL;
 
 ### index
 
-全表扫描二级索引，且不用进行回表，索引本身就有需要的数据，成本比全表扫描聚簇索引小。
+全表扫描二级索引，且不用进行回表（索引覆盖），索引本身就有需要的数据，成本比全表扫描聚簇索引小。
 
 ```
 SELECT key_part1, key_part2, key_part3 FROM single_table WHERE key_part2 = 'abc';
@@ -1986,7 +1988,7 @@ SELECT * FROM t1 [INNER | CROSS] JOIN t2 [ON 连接条件] [WHERE 普通过滤�
 SELECT * FROM t1, t2 WHERE t1.m1 > 1 AND t1.m1 = t2.m2;
 ```
 
-连接查询有个特殊情况，如果被驱动表使用主键或者唯一二级索引与常数进行等值比较来定位一个记录，这种方法应该称为 eq_ref 而非 const。
+连接查询时，如果被驱动表使用主键或者不允许为 NULL 的唯一二级索引与常数等值比较来执行查询，这个访问方法称为 eq_ref 而非 const。
 
 ### 基于块的嵌套循环
 
@@ -2000,9 +2002,11 @@ SELECT * FROM t1, t2 WHERE t1.m1 > 1 AND t1.m1 = t2.m2;
 
 另外，需要注意，只有查询列表中的列和过滤条件中的列才会被放到 Join Buffer。所以，最好不要把 * 放在查询列表，它的坏处远不止这一个。
 
-# 基于成本优化
+# 基于成本优化查询
 
 ## 查询成本定义
+
+前面反复提到 "成本" 这个词，MySQL 优化器基于成本做出许多决策，比如选择哪个索引执行查询。
 
 MySQL 执行一条查询语句的成本主要由以下两部分组成：
 
@@ -2027,7 +2031,7 @@ WHERE key1 IN ('a', 'b', 'c')
 
 ### 执行的大致步骤
 
-真正执行一条查询语句之前，MySQL 需要找出所有可行方案，对比各个方案的成本并选择最优项，这个最优方案就是执行计划，然后按计划调用存储引擎接口。该过程的步骤大致如下：
+真正执行一条查询语句之前，MySQL 需要找出所有可行方案，然后选出最优方案，该过程的步骤大致如下：
 
 * 根据搜索条件，找出所有可能使用的索引；
 * 计算全表扫描的代价；
@@ -2038,7 +2042,7 @@ WHERE key1 IN ('a', 'b', 'c')
 
 已知只要索引列使用 =、<=>、IN、NOT IN、IS NULL、IS NOT NULL、>、<、>=、<=、BETWEEN、!= 或 LIKE 与常数连接，就能形成一个扫描范围，便可以使用索引，MySQL 称查询可能用到的索引为 possible keys。
 
-以下逐一分析查询条件：
+逐一分析查询的所有条件：
 
 * *key1 IN('a','b','c')*：该条件可以使用二级索引 idx_key1；
 * *key2 > 10 AND key2 < 1000*：该条件可以使用二级索引 uk_key2；
@@ -2280,6 +2284,522 @@ INSERT INTO mysql.engine_cost
 
 最后，依然需要使用 `FLUSH OPTIMIZER_COSTS;` 重新加载成本常数。
 
-# 收集统计数据
-
 # 基于规则优化查询
+
+MySQL 经常会遇到一些执行起来非常糟糕的语句，为此，MySQL 将依据一些规则，尽力把这些语句转换为某种能够高效执行的形式，这个过程称为查询重写。本章讲解一些重要的重写规则。
+
+## 条件的化简
+
+查询语句的搜索条件本质上是表达式，这些表达式可能比较复杂无法高效执行，优化器会尝试简化它们。
+
+### 移除多余括号
+
+表达式可能包含许多无用的括号，如下所示。
+
+```
+((a = 5 AND b = c) OR ((a > c) AND (c < 5)));
+```
+
+MySQL 会把不必要的括号移除，结果如下。
+
+```
+(a = 5 and b = c) OR (a > c AND c < 5);
+```
+
+### 常量传递
+
+如果表达式是某个字段和某个常量做等值比较，比如下面。
+
+```
+a = 5;
+```
+
+如果该表达式与其它列 a 相关的表达式使用 AND 连接，就把其它表达式中 a 替换为常数。
+
+```
+a = 5 AND b > a;
+```
+
+处理之后
+
+```
+a = 5 AND b > 5;
+```
+
+### 移除无用条件
+
+优化器会把一些明显永远为 TRUE 或 FALSE 的表达式移除，比如下面。
+
+```
+(a < 1 and b = b) OR (a = 6 OR 5 != 5);
+```
+
+处理之后
+
+```
+a < 1 OR a = 6;
+```
+
+### 表达式计算
+
+开始执行查询之前，如果表达式中只包含常量，它的值会被先计算出来，比如下面。
+
+```
+a = 5 + 1;
+```
+
+表达式 5 + 1 只有常量，先计算出来。
+
+```
+a = 6;
+```
+
+需要注意，如果某个列不是以单独的形式作为表达式的操作数，比如出现在函数内、或者某个表达式中，优化器不会对这些表达式进行化简，比如下面两个表达式。
+
+```
+ABS(a) > 5;
+```
+
+```
+-a < -8;
+```
+
+前文说过，只有索引列与常数使用某些操作符连接起来，才能形成扫描区间，所以最好让索引列以单独形式出现在搜索条件表达式中。
+
+### HAVING 与 WHERE 合并
+
+如果查询语句中没有 SUM、MAX 等聚合函数以及 GROUP BY 子句，优化器就会把 HAVING 子句和 WHERE 子句合并起来。
+
+### 常量表检测
+
+MySQL 认为以下两种类型的查询运行地特别快：
+
+* 查询的表中一条记录没有，或者只有一条记录。依靠统计数据判断，但 InnoDB 表统计数据不精确，所以这种方式不能用于 InnoDB 表，只适合 MEMORY 或 MyISAM 表；
+* 把主键或唯一二级索引的等值匹配作为搜索条件查询某个表。
+
+MySQL 把这两种表称为常量表，优化器分析一个查询语句的时候，首先会执行常量表查询，然后把查询中关于该表的条件全部替换成常数，最后再分析其它表的查询成本。
+
+以下查询，明显能够使用主键和常量的等值匹配来查询 table1 表，所以 table1 是常量表。分析 table2 表的查询成本之前，先执行 table1 表的查询，并把 table2 表查询中涉及 table1 表的条件都替换掉。
+
+```
+SELECT *
+FROM table1
+         INNER JOIN table2
+                    ON table1.column1 = table2.column2
+WHERE table1.primary_key = 1;
+```
+
+替换之后，以上语句会就成下面这样。
+
+```
+SELECT table1表记录的各个字段的常量值, table2.*
+FROM table1
+         INNER JOIN table2
+                    ON table1表column1列的常量值 = table2.column2;
+```
+
+## 外连接消除（空值拒绝）
+
+内连接与外连接的区别无需多言，但是，如果外连接使用 WHERE 子句指定被驱动表的列不为 NULL，那么整个外连接的结果与内连接完全相同。MySQL 把这种查询条件称为空值拒绝，这时外连接可以与内连接互换，优化器就能交换表的连接顺序，分析出成本更低的执行方案。
+
+## 子查询优化
+
+### 认识子查询
+
+子查询就是出现在另一个查询内的查询，子查询能处于外层查询的任何位置，但不是每个位置都有意义。
+
+#### 子查询合法位置
+
+以下列举子查询可以出现在外层查询的哪些位置：
+
+* SELECT 子句；
+
+  ```
+  SELECT (SELECT m1 FROM t1 LIMIT 1);
+  ```
+
+* FROM 子句，子查询的结果作为外层查询的表，这种表称为派生表；
+
+  ```
+  SELECT m, n FROM (SELECT m2 + 1 AS m, n2 AS n FROM t2 WHERE m2 > 2) AS t;
+  ```
+
+* WHERE 或 ON 子句，以下查询从 t1 表找出 m1 字段能与 t2 表 m2 字段匹配的记录；
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2);
+  ```
+
+* ORDER BY 子句，GROUP BY 子句，虽然合法，但没意义。
+
+#### 按返回结果分类
+
+根据结果集的类型，可对子查询进行分类：
+
+* 标量子查询：返回一个单一值，这种查询可以作为一个单一值，或者表达式的一部分。
+
+  ```
+  SELECT * FROM t1 WHERE m1 = (SELECT MIN(m2) FROM t2);
+  ```
+
+* 行子查询：返回一条记录，包含多个列。
+
+  ```
+  SELECT * FROM t1 WHERE (m1, n1) = (SELECT m2, n2 FROM t2 LIMIT 1);
+  ```
+
+* 列子查询：返回多条记录，都只有同一个列。
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2);
+  ```
+
+* 表子查询：结果集既有多条记录，又有多个列。
+
+  ```
+  SELECT * FROM t1 WHERE (m1, n1) IN (SELECT m2, n2 FROM t2);
+  ```
+
+#### 按外层关系分类
+
+根据与外层查询的关系，可对子查询进行分类：
+
+* 不相关子查询：子查询可以单独运行，而不使用外层查询的任何值；
+
+* 相关子查询：子查询的执行需要使用外层查询的值，比如以下语句。
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2 WHERE n1 = n2);
+  ```
+
+#### 布尔表达式应用
+
+像 `SELECT (SELECT m1 FROM t1 LIMIT 1);` 这种子查询，毫无意义。子查询最常见的用处是布尔表达式，比如 WHERE 子句或 ON 子句。以下介绍一些子查询在布尔表达式中的使用场景。
+
+* 与 =、>、<、>=、<=、<>、!=、<=> 等 comparison_operator 连接，作为布尔表达式的操作数，操作数可以是常量、列名、表达式，或者另一个子查询。只能是标量子查询或行子查询。
+
+  ```
+  操作数 comparison_operator (子查询)
+  ```
+
+* [NOT] IN/ANY/SOME/ALL 子查询。列/表子查询返回多条记录，相当于一个集合，MySQL 支持使用以下语法把某个操作数和一个集合组成一个布尔表达式。
+
+  * [NOT] IN，判断子查询的结果集是否包含指定操作数。
+
+    ```
+    操作数 [NOT] IN (子查询)
+    ```
+
+  * ANY 和 SOME 同义，只要子查询结果集的某一个值与操作数比较返回 TURE，整个表达式就是 TRUE。
+
+    ```
+    操作数 comparison_operator ANY/SOME(子查询)
+    ```
+
+  * ALL，仅当子查询结果集的每一个值与操作数比较都返回 TURE，整个表达式才是 TRUE。
+
+    ```
+    操作数 comparison_operator ALL(子查询)
+    ```
+
+* EXISTS 子查询，判断子查询结果集是否有记录，有则返回 TRUE。
+
+  ```
+  [NOT] EXISTS (子查询)
+  ```
+
+#### 子查询注意事项
+
+* 子查询必须用圆括号括起来；
+
+* SELECT 子句中的子查询只能是标量子查询；
+
+* 想要得到标量子查询或者行子查询，但又不能保证结果集只有一条记录，应该使用 LIMIT 1 语句；
+
+* 对于 [NOT] IN/ANY/SOME/ALL 子查询，子查询不允许有 LIMIT 语句；为什么？硬性规定。
+
+* 子查询的结果相当于一个集合，其中的记录排不排序不重要，ORDER BY 子句没必要；
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2 ORDER BY m2);
+  ```
+
+* 同样，子查询结果集的记录去不去重也不重要，DISTINCT 也没必要；
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT DISTINCT m2 FROM t2);
+  ```
+
+* 没有聚合函数和 HAVING 子句，GROUP BY 子句便没效果，优化器会清除它。
+
+  ```
+  SELECT * FROM t1 WHERE m1 IN (SELECT m2 FROM t2 GROUP BY m2);
+  ```
+
+* 不允许在增删改某个表的记录的同时对该表进行子查询，以下语句将会报错。
+
+  ```
+  DELETE FROM t1 WHERE m1 < (SELECT MAX(m1) FROM t1);
+  ```
+
+### 子查询执行
+
+假设有两个表 s1 和 s2，与表 *single_table* 完全一样。
+
+#### 标量/行子查询
+
+标量子查询和行子查询常用于两个地方：
+
+* SELECT 子句；
+* 与 =、>、< 等操作符连接组成布尔表达式。
+
+对于这两场景的不相关子查询，执行非常简单。MySQL 分开执行子查询和外层查询，首先执行子查询，然后把子查询结果作为参数插入外层查询执行，得到最终结果。
+
+至于相关的子查询，则从外层查询开始，每遍历一条记录，就用相关值执行子查询，然后根据子查询结果判断这条记录是否放入最终结果，反复循环，直至访问完所有记录。看起来效率很低，子查询会被执行很多次。
+
+#### IN 子查询优化
+
+关键字：物化表，半连接，转换 IN 为 EXIST
+
+#### ANY/ALL 子查询
+
+如果是不相关 ANY/ALL 子查询，很多时候都能转换为更有效率的方式执行。
+
+| ANY/ALL 不相关子查询          | 优化结果                       |
+| ----------------------------- | ------------------------------ |
+| < ANY (SELECT inner_expr ...) | < (SELECT MAX(inner_expr) ...) |
+| > ANY (SELECT inner_expr ...) | > (SELECT MIN(inner_expr) ...) |
+| < ALL (SELECT inner_expr ...) | < (SELECT MIN(inner_expr) ...) |
+| > ALL (SELECT inner_expr ...) | > (SELECT MAX(inner_expr) ...) |
+
+#### EXISTS 子查询
+
+如果是不相关 [NOT] EXISTS 子查询，可以先执行子查询，然后用 TRUE 或 FALSE 重写原来的查询语句。比如以下查询语句：
+
+```
+SELECT *
+    FROM s1
+        WHERE EXISTS(SELECT 1 FROM s2 WHERE key1 = 'a')
+           OR key2 > 100;
+```
+
+重写之后
+
+```
+SELECT * FROM s1
+        WHERE TRUE
+           OR key2 > 100;
+```
+
+至于相关 [NOT] EXISTS 子查询，则与相关标量子查询类似，遍历外层查询的表，每条记录都执行一次子查询判断该记录是否放入最终结果。
+
+#### 派生表的优化
+
+已知 FROM 子查询是一个派生表，遇到这种有派生表的查询，MySQL 首先会尝试将派生表和外层的表合并，重写查询为没有派生表的形式。比如以下查询语句。
+
+```
+SELECT * FROM 
+	(SELECT * FROM s1 WHERE key1 = 'a') AS derived_s1
+		INNER JOIN s2
+			ON derived_s1.key1 = s2.key1
+				WHERE s2.key2 = 1;
+```
+
+把派生表和外层查询的表合并，派生表的搜索条件放到外层查询的搜索条件，结果如下。
+
+```
+SELECT * FROM s1 INNER JOIN s2
+		ON s1.key1 = s2.key1
+			WHERE s1.key1 = 'a' AND s2.key2 = 1;
+```
+
+合并派生表可以省去创建和访问临时表的成本，但不是所有查询都能合并派生表，若派生表有以下语句就无法和外层查询合并：聚合函数、DISTINCT、GROUP BY、HAVING、LIMIT、UNION [ALL]、子查询等。
+
+如果派生表无法合并，就对派生表进行物化来完成查询。物化就是把子查询的结果存为临时表，然后把派生表当作普通表一样执行查询。这里有个**延迟物化机制**，MySQL 仅当查询真正使用派生表时才进行物化。
+
+# 统计数据收集
+
+# 查询优化解析 EXPLAIN
+
+MySQL 支持 EXPLAIN 语句，用于查看指定查询语句的执行计划，通过 EXPLAIN 返回的信息，用户可以更有针对性地提升查询语句的性能。
+
+如何使用？直接把 EXPLAIN 放在要分析的语句之前就行，SELECT、DELETE、INSERT、UPDATE 等都能使用。
+
+```
+EXPLAIN SELECT 1;
+```
+
+EXPLAIN 返回的信息就是查询语句的执行计划，包含多个列，本章的重点就是了解这些列的意义。
+
+## table
+
+无论查询语句多复杂，包含多少个表，最后还是要对相关表进行单表访问。EXPLAIN 输出的每一条记录，都对应某个单表的访问方法。单个查询会访问多少个表，就会有多少条记录，包括用户表、临时表。
+
+列 table 表示当前记录访问的表的表名。
+
+## id
+
+查询语句每出现一个 SELECT 关键字，MySQL 就会为其分配一个唯一 ID。所以，多表连接的查询语句，肯定会有多条记录 id 相同，前边的记录是驱动表。
+
+对于包含子查询的语句，会有多个 id 值不同的记录，前边的记录对应的表属于外层查询。有个特殊情况，优化器可能会把包含子查询的语句重写为连接查询，这时所有记录 id 都相同。
+
+对于 UNION 语句，会有多个 id 值不同的记录，另外还会有一条特殊记录，表示用于合并去重的临时表。可以从表名看出临时表，比如 *<union1,2>* 表示合并 id 为 1 和 2 两表的临时表，这条记录 id 为 NULL。相对而言，如果使用 UNION ALL 进行合并，不需去重，就没有临时表这条记录。
+
+## select_type
+
+单个查询可以包含多个 SELECT，每个 SELECT 是一个小查询，每个小查询能 FROM 多个表，每一个表就对应一条记录。同一个查询的表 id 相同。
+
+列 select_type 表示当前记录对应的查询在整个查询中扮演着什么角色，以下是各个值的说明：
+
+* SIMPLE：没有包含 UNION 或者子查询的查询；
+* PRIMARY：子查询或者 UNION [ALL] 中最左边的第一个小查询；
+* UNION：UNION [ALL] 中除第一个以外的其它小查询；
+* UNION RESULT：UNION 合并去重使用的临时表；
+* SUBQUERY：如果子查询不能转换为半连接，且是**不相关**子查询，且优化器决定使用物化的方式执行该子查询时，该子查询的第一个小查询；
+* DEPENDENT SUBQUERY：如果**相关**子查询不能转为半连接，该子查询的第一个小查询；
+* DEPENDENT UNION：如果 UNION [ALL] 中小查询都依赖于外层查询，除第一个以外的其它小查询；
+* DERIVED：包含派生表且以物化方式执行，物化表对应的查询；
+* MATERIALIZED：使用物化方式与外层查询连接，以此执行的子查询；
+* UNCACHEABLE SUBQUERY，UNCACHEABLE UNION：忽略。
+
+## partitions
+
+忽略
+
+## type
+
+查询计划的每一条记录都对应某个表的访问方法，其中 type 列表示这个方法是什么。之前学习的单表访问方法只针对 InnoDB 表，且不全面，以下是完整访问方法的说明。
+
+* system：如果表只有一条记录，且该表的存储引擎的统计数据精确，访问该表的方法就是 system；
+* const
+* eq_ref：连接查询中，被驱动表使用主键或者唯一二级索引等值匹配来执行查询；
+* ref
+* fulltext：全文索引
+* ref_or_null
+* index_merge：索引合并，唯一会使用多个索引的方法；
+* unique_subquery：类似 eq_ref，但针对包含 IN 子查询的语句。如果优化器决定将 IN 子查询转为 EXIST 子查询，且子查询转换后可以使用主键或者不允许为 NULL 的唯一二级索引进行等值匹配来执行，那么该子查询使用的访问方法就是 unique_subquery。
+* index_subquery：与 unique_subquery 类似，但这里子查询使用的是普通索引；
+* range
+* index
+* ALL
+
+通常，这些访问方法按照从上到下的顺序性能依次变差，但也不绝对，有时使用索引倒不如全表扫描。
+
+## possible_keys 和 key
+
+列 possible_keys 表示单表查询时所有可用的索引，优化器会对这些索引进行成本分析。列 key 是查询计划实际会使用的索引。
+
+使用 index 访问方法查询某个表时，possible_keys 为空，而 key 列会展示实际使用的索引。
+
+需要明白，possible_keys 不是越多越好，太多会增加优化器成本分析的消耗。
+
+## key_len
+
+表示当前记录对应的查询用于形成扫描区间的边界条件列，最大长度是多少。这个值有什么用？用户可以根据该值判断优化器选择使用哪些搜索条件作为边界条件。
+
+示例，以下查询会使用 id 列形成单点扫描区间，id 是 INT，所以 key_len 为 4。
+
+```
+SELECT * FROM s1 WHERE id = 5;
+```
+
+示例，假如查询使用 idx_key1 索引，key1 = 'a' 就是边界条件，key1 是 VARCHAR(100)，最多 3*100 字节，变长字段需用 1 或 2 个字节存储实际长度，又因为允许 NULL 值，还需 1 字节。所以 key_len 为 303。
+
+```
+SELECT * FROM s1 WHERE key1 = 'a';
+```
+
+示例，假如查询使用 idx_key_part 索引，列 key_part1 和 key_part2 都会使用，则 key_len 为 606。
+
+```
+SELECT * FROM s1 WHERE key_part1 = 'a' AND key_part2 = 'b';
+```
+
+## ref
+
+当使用索引列等值匹配的条件来执行查询，访问方法为 const、eq_ref、ref、ref_or_null、unique_subquery、index_subquery 其中之一时，列 ref 表示与索引列等值匹配的对象是什么？可能是常数，或者某个列。
+
+示例，与 key1 等值比较的是一个常数，ref 值为 cons。
+
+```
+SELECT * FROM s1 WHERE key1 = 'a';
+```
+
+示例，与被驱动表 s2.id 等值比较的是 s1.id 列，ref 值为 s1.id。
+
+```
+SELECT * FROM s1 INNER JOIN s2 ON s1.id = s2.id;
+```
+
+示例，与 s2.key1 等值比较的是函数 UPPER(s1.key1)，ref 值为 func。
+
+```
+SELECT * FROM s1 INNER JOIN s2 ON s2.key1 = UPPER(s1.key1);
+```
+
+## rows
+
+如果优化器决定使用全表扫描的方式执行查询，列 rows 就是预计需要扫描的行数。如果使用索引来执行查询，列 rows 就是预计要扫描的索引记录行数。
+
+示例，rows 值为 266，表示经过成本分析之后，优化器认为有 266 条索引记录满足 key1 > 'z'。
+
+```
+SELECT * FROM s1 WHERE key1 > 'z';
+```
+
+## filtered
+
+分析连接查询的成本时，提到条件过滤，用来估算驱动表的扇出。属性 filtered 与估算息息相关。
+
+示例，假如使用 idx_key1 执行查询，从 rows 知道有 266 条记录满足 key1 > 'z'，然后 filtered 为 10.00，表示优化器预测有 10% 记录满足另一个条件 common_field = 'a'。
+
+```
+SELECT * FROM s1 WHERE key1 > 'z' AND common_field = 'a';
+```
+
+示例，假如 s1 是驱动表，对应 rows 是 9688，filtered 是 10.00，那么驱动表的扇出就是 968.8。
+
+```
+SELECT * FROM s1 INNER JOIN s2 ON s1.key1 = s2.key1 WHERE s1.common_field = 'a';
+```
+
+## Extra
+
+列 Extra 表示访问的额外信息，比如是否使用临时表、排序方式等，这里只介绍一些常见或重要的值：
+
+* No tables used：查询语句没有 FROM 子句，比如 `SELECT 1;`；
+
+* Impossible WHERE：查询语句 WHERE 子句永远为 FALSE；
+
+* No matching min/max row：查询列表有 MIN 或 MAX 聚集函数，但是没有符合搜索条件的记录；
+
+* Using index：查询列表和搜索条件的列都被某个索引包含，使用**索引覆盖**；
+
+* Using index condition：有些搜索条件虽然出现了索引列，但不能充当边界条件，使用**索引下推**；
+
+  注意，MySQL 会冗余地对边界条件进行索引下推，所以就算没有其它条件，也会显示索引下推。
+
+* Using where：某个搜索条件需要在 server 层进行判断；
+
+* Using join buffer（Block Nested Loop）：连接查询中，被驱动表使用基于块的嵌套循环算法执行；
+
+* Using intersect(.. .)、U sing union(. . .) 和 Using sort_union(...)：索引合并；
+
+* Zero limit：LlMlT 子句的参数为 0；
+
+* Using filesort：使用文件排序，如果不能使用索引来排序，那就只能在内存中或磁盘上进行排序，这种排序方式称为文件排序，filesort 比较多的话很耗费性能；
+
+  GROUP BY 子句默认添加 ORDER BY 子句，使用 ORDER BY NULL 禁止排序。
+
+* Using temporary：使用临时表，无法有效利用索引完成查询，MySQL 可能会创建临时表来完成排序、去重等工作，这对包含 DISTINCT、GROUP BY、UNION 子句的查询很常见；临时表也很耗费性能。
+
+* Start temporary，End temporary：把 IN 子查询转为半连接，执行策略为 DuplicateWeedout，通过临时表实现对外层查询的记录去重，驱动表显示 Start temporary，被驱动表显示 End temporary；
+
+* LooseScan：把 IN 子查询转为半连接，执行略测为 LooseScan，驱动表显示该信息；
+
+* FirstMatch(tbl_name)：把 IN 子查询转为半连接，执行策略为 FirstMatch，驱动表显示该信息。
+
+
+
+
+
